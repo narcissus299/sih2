@@ -11,6 +11,8 @@ contract Task is User {
     uint expAwarded;
     uint reward;
     uint postTime;
+    bool clawbackEnabled;
+    uint clawbackDeadline;
     }
 
     Task[] public tasks;
@@ -31,10 +33,12 @@ contract Task is User {
     // Evaluated 7
     // Pending 8
     // Completed 9
+    // Clawback Initiated 10
+    // Clawback Completed 11
 
-    function generateTask(uint _requesterId)  {
+    function generateTask(uint _requesterId, bool _enableClawback)  {
         require(msg.sender == requesterAddress[_requesterId]);
-        uint taskId = tasks.push(Task(_requesterId, 10 days, 100, 50, 5, uint32(now))) - 1;
+        uint taskId = tasks.push(Task(_requesterId, 10 days, 100, 50, 5, uint32(now), _enableClawback, 0)) - 1;
         taskStatus[taskId] = 1;
 
         //new event for the new task
@@ -84,13 +88,15 @@ contract Task is User {
 
 
     function rewardWorker(uint _workerId, uint taskId)  {
-
         workers[_workerId].accountBalance += uint32(tasks[taskId].reward);
         workers[_workerId].expPts += uint32(tasks[taskId].expAwarded);
         taskStatus[taskId] = 9;
         workerStatus[_workerId] = 2;
-
-
+        
+        // If clawback is enabled, set the clawback deadline to 30 days from now
+        if (tasks[taskId].clawbackEnabled) {
+            tasks[taskId].clawbackDeadline = uint32(now) + 30 days;
+        }
     }
 
     function acceptSubmission(uint _requesterId, uint taskId)  {
@@ -128,4 +134,64 @@ contract Task is User {
 
  //define a function to turn cancelled task to pending
  //define a function to turn pending task to cancelled
+
+    // Clawback system functions
+    function initiateClawback(uint _requesterId, uint taskId) {
+        require(msg.sender == requesterAddress[_requesterId]);
+        require(tasks[taskId].requesterId == _requesterId);
+        require(taskStatus[taskId] == 9); // Can only clawback completed tasks
+        require(tasks[taskId].clawbackEnabled);
+        require(now <= tasks[taskId].clawbackDeadline); // Must be within clawback period
+        
+        // Change task status to clawback initiated
+        taskStatus[taskId] = 10;
+        
+        // Event for clawback initiation
+        // ClawbackInitiated(taskId, _requesterId, taskAssignedTo[taskId]);
+    }
+    
+    function executeClawback(uint _requesterId, uint taskId, string reason) {
+        require(msg.sender == requesterAddress[_requesterId]);
+        require(tasks[taskId].requesterId == _requesterId);
+        require(taskStatus[taskId] == 10); // Must be in clawback initiated state
+        
+        uint workerId = taskAssignedTo[taskId];
+        
+        // Ensure worker has enough balance
+        require(workers[workerId].accountBalance >= tasks[taskId].reward);
+        
+        // Transfer funds back to requester
+        workers[workerId].accountBalance -= uint32(tasks[taskId].reward);
+        requesters[_requesterId].accountBalance += uint32(tasks[taskId].reward);
+        
+        // Reduce experience points awarded for the task
+        if (workers[workerId].expPts >= tasks[taskId].expAwarded) {
+            workers[workerId].expPts -= uint32(tasks[taskId].expAwarded);
+        }
+        
+        taskStatus[taskId] = 11; // Clawback completed
+        
+        // Event for clawback execution
+        // ClawbackExecuted(taskId, _requesterId, workerId, reason);
+    }
+    
+    function cancelClawback(uint _requesterId, uint taskId) {
+        require(msg.sender == requesterAddress[_requesterId]);
+        require(tasks[taskId].requesterId == _requesterId);
+        require(taskStatus[taskId] == 10); // Must be in clawback initiated state
+        
+        // Revert back to completed state
+        taskStatus[taskId] = 9;
+        
+        // Event for clawback cancellation
+        // ClawbackCancelled(taskId, _requesterId, taskAssignedTo[taskId]);
+    }
+    
+    function isClawbackEnabled(uint taskId) view returns (bool) {
+        return tasks[taskId].clawbackEnabled;
+    }
+    
+    function getClawbackDeadline(uint taskId) view returns (uint) {
+        return tasks[taskId].clawbackDeadline;
+    }
 }
